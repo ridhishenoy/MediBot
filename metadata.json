@@ -1,0 +1,6 @@
+{
+  "name": "MediBot Dashboard",
+  "description": "Smart Vital Monitoring and Analysis System for MediBot hardware. Tracks heart rate, SpO2, and temperature with AI insights.",
+  "requestFramePermissions": ["bluetooth"],
+  "majorCapabilities": []
+}

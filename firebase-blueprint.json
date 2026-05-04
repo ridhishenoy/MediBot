@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account and health profile information.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique identifier for the user." },
+        "name": { "type": "string", "description": "Display name of the user." },
+        "bloodGroup": { "type": "string", "description": "User's blood group (e.g., A+, O-)." },
+        "height": { "type": "number", "description": "User's height in cm." },
+        "weight": { "type": "number", "description": "User's weight in kg." },
+        "avatarUrl": { "type": "string", "description": "URL to the user's avatar image." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name"]
+    },
+    "VitalMeasurement": {
+      "title": "Vital Measurement",
+      "description": "A single vital sign reading from MediBot or manual entry.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "ID of the user this reading belongs to." },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "heartRate": { "type": "number", "description": "Heart rate in BPM." },
+        "spo2": { "type": "number", "description": "SpO2 percentage." },
+        "temperature": { "type": "number", "description": "Body temperature in Celsius." },
+        "stress": { "type": "string", "description": "Calculated stress level (Low, Mod, High)." },
+        "type": { "type": "string", "enum": ["auto", "manual"], "description": "Whether reading was from MediBot or manual." }
+      },
+      "required": ["userId", "timestamp", "heartRate"]
+    },
+    "AIAnalysis": {
+      "title": "AI Analysis",
+      "description": "AI-generated recommendations and analysis for the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "content": { "type": "string", "description": "The Markdown analysis content." },
+        "vitalsId": { "type": "string", "description": "The ID of the vitals record this analysis is based on." }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user profiles."
+    },
+    "/measurements/{measurementId}": {
+      "schema": "VitalMeasurement",
+      "description": "Flat collection of all measurements, queryable by userId."
+    },
+    "/analyses/{analysisId}": {
+      "schema": "AIAnalysis",
+      "description": "Collection of AI generated insights."
+    }
+  }
+}
