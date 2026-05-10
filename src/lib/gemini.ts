@@ -8,17 +8,33 @@ export async function analyzeVitals(vitals: { hr: number, spo2: number, temp: nu
     return "AI analysis is currently unavailable (missing API key).";
   }
 
-  const prompt = `
-    As a medical AI assistant for MediBot, analyze these vitals briefly:
-    HR: ${vitals.hr} BPM, SpO2: ${vitals.spo2}%, Hand Temp: ${vitals.temp}°C, Stress: ${vitals.stress || 'Not calculated'}.
-    Patient: ${patientData?.weight || 'Unknown'} kg, Blood Group: ${patientData?.bloodGroup || 'Unknown'}.
-    
-    Please provide a very short and sweet summary (max 2-3 sentences) including:
-    1. Status/Concerns.
-    2. Quick recommendation.
-    
-    Add a short disclaimer at the end: *AI-generated, not medical advice.*
-  `;
+  const prompt = `You are MediBot, an objective clinical analysis system.
+Analyze the following vitals and output STRICTLY in the requested format.
+DO NOT use conversational filler, greetings, or first-person pronouns (like "I", "my").
+
+PATIENT VITALS:
+- Heart Rate (HR): ${vitals.hr} BPM
+- Blood Oxygen (SpO2): ${vitals.spo2}%
+- Hand Temperature: ${vitals.temp}°C
+- Stress Level: ${vitals.stress || 'Not calculated'}
+- Weight: ${patientData?.weight || 'Unknown'} kg
+- Blood Group: ${patientData?.bloodGroup || 'Unknown'}
+
+TEMPERATURE REFERENCE (STRICTLY APPLY THIS):
+- 28 to 31°C: Cold hands / cold environment
+- 31 to 34°C: Normal cool hand temperature
+- 34 to 36°C: Warm hand / good circulation
+- 36 to 37°C: Very warm skin surface
+- Above 37°C: Heat source / possible fever
+
+OUTPUT FORMAT (Markdown):
+**Overview:** [Maximum 2 concise sentences summarizing the vitals objectively but the line should strictly start with "Your vitals indicate" and continue from there"]
+
+**Concerns:** [Maximum 1 sentence noting any abnormal values. Write "None observed." if all vitals are normal.]
+
+**Recommendations:** [Maximum 1 sentence of standard clinical advice based on concerns. Write "Continue standard monitoring." if no concerns.]
+
+`;
 
   let retries = 3;
   let delay = 1000;
@@ -28,6 +44,9 @@ export async function analyzeVitals(vitals: { hr: number, spo2: number, temp: nu
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          temperature: 0.2,
+        }
       });
 
       return response.text;
@@ -40,17 +59,17 @@ export async function analyzeVitals(vitals: { hr: number, spo2: number, temp: nu
       }
 
       console.error("Gemini AI error:", error);
-      
+
       // Provide a more helpful error message based on the API response
       if (error?.status === 429) {
         return "AI analysis failed: You have exceeded your API rate limit. Please wait a minute and try again.";
       } else if (error?.status === 503) {
         return "AI analysis failed: The AI model is currently experiencing high demand. Please try again in a few moments.";
       }
-      
+
       return `Failed to generate AI analysis: ${error?.message || "Unknown error occurred"}`;
     }
   }
-  
+
   return "AI analysis failed: Unknown error occurred";
 }
