@@ -8,10 +8,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, getDocs, setDoc, doc, limit, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2 } from 'lucide-react';
+import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 
@@ -42,6 +42,37 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'week' | 'month' | 'year' | 'manual'>('all');
+  const [manualRange, setManualRange] = useState({ from: '', to: '' });
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+
+  const filteredHistory = useMemo(() => {
+    const now = new Date();
+    let filtered = [...measurements];
+    
+    if (historyFilter === 'week') {
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      filtered = filtered.filter(m => new Date(m.timestamp) >= oneWeekAgo);
+    } else if (historyFilter === 'month') {
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      filtered = filtered.filter(m => new Date(m.timestamp) >= thirtyDaysAgo);
+    } else if (historyFilter === 'year') {
+      const oneYearAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      filtered = filtered.filter(m => new Date(m.timestamp) >= oneYearAgo);
+    } else if (historyFilter === 'manual') {
+      if (manualRange.from) {
+        const fromDate = new Date(manualRange.from);
+        filtered = filtered.filter(m => new Date(m.timestamp) >= fromDate);
+      }
+      if (manualRange.to) {
+        const toDate = new Date(manualRange.to);
+        toDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(m => new Date(m.timestamp) <= toDate);
+      }
+    }
+    
+    return filtered.reverse();
+  }, [measurements, historyFilter, manualRange]);
 
   // Save selected profile to localStorage
   useEffect(() => {
@@ -577,7 +608,91 @@ export default function App() {
 
               {currentView === 'history' && (
                 <div className="flex flex-col gap-8">
-                  <h1 className="text-5xl font-display font-bold">Patient History</h1>
+                  <div className="flex items-center justify-between">
+                    <h1 className="text-5xl font-display font-bold">Patient History</h1>
+                    <div className="relative">
+                      <button 
+                        onClick={() => setIsFilterDropdownOpen(!isFilterDropdownOpen)}
+                        className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-bold text-sm"
+                      >
+                        <ListFilter size={18} className="text-brand-indigo" />
+                        <span>Filter: {historyFilter === 'all' ? 'All Time' : historyFilter === 'week' ? 'Last 1 Week' : historyFilter === 'month' ? 'Last 30 Days' : historyFilter === 'year' ? 'Last Year' : 'Manual'}</span>
+                        <ChevronDown size={16} className={cn("transition-transform", isFilterDropdownOpen && "rotate-180")} />
+                      </button>
+
+                      <AnimatePresence>
+                        {isFilterDropdownOpen && (
+                          <>
+                            <div className="fixed inset-0 z-10" onClick={() => setIsFilterDropdownOpen(false)}></div>
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              className="absolute right-0 mt-2 w-72 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 p-2 z-20"
+                            >
+                              {[
+                                { id: 'all', label: 'All Time' },
+                                { id: 'week', label: 'Last 1 Week' },
+                                { id: 'month', label: 'Last 30 Days' },
+                                { id: 'year', label: 'Last Year' },
+                                { id: 'manual', label: 'Manual Range' },
+                              ].map((opt) => (
+                                <button
+                                  key={opt.id}
+                                  onClick={() => {
+                                    setHistoryFilter(opt.id as any);
+                                    if (opt.id !== 'manual') setIsFilterDropdownOpen(false);
+                                  }}
+                                  className={cn(
+                                    "w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-all flex items-center justify-between",
+                                    historyFilter === opt.id ? "bg-indigo-50 dark:bg-brand-indigo/10 text-brand-indigo" : "hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"
+                                  )}
+                                >
+                                  {opt.label}
+                                  {historyFilter === opt.id && <div className="w-1.5 h-1.5 rounded-full bg-brand-indigo" />}
+                                </button>
+                              ))}
+
+                              {historyFilter === 'manual' && (
+                                <div className="mt-2 p-3 bg-slate-50 dark:bg-slate-900/50 rounded-xl space-y-3">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">From Date</label>
+                                    <div className="relative">
+                                      <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                      <input 
+                                        type="date" 
+                                        value={manualRange.from}
+                                        onChange={(e) => setManualRange(prev => ({ ...prev, from: e.target.value }))}
+                                        className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-indigo/30 outline-none"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">To Date</label>
+                                    <div className="relative">
+                                      <CalendarIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+                                      <input 
+                                        type="date" 
+                                        value={manualRange.to}
+                                        onChange={(e) => setManualRange(prev => ({ ...prev, to: e.target.value }))}
+                                        className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-indigo/30 outline-none"
+                                      />
+                                    </div>
+                                  </div>
+                                  <button 
+                                    onClick={() => setIsFilterDropdownOpen(false)}
+                                    className="w-full py-2 bg-brand-indigo text-white rounded-lg text-xs font-bold hover:bg-brand-indigo-hover transition-all"
+                                  >
+                                    Apply Filter
+                                  </button>
+                                </div>
+                              )}
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
                   <div className="sleek-card overflow-hidden">
                     <table className="w-full text-left">
                       <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 text-xs font-bold uppercase tracking-wider">
@@ -592,7 +707,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {measurements.slice().reverse().map((m) => (
+                        {filteredHistory.map((m) => (
                           <tr key={m.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                             <td className="px-6 py-4 text-sm font-medium">{new Date(m.timestamp).toLocaleString()}</td>
                             <td className="px-6 py-4 text-sm">{m.heartRate} BPM</td>
