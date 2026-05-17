@@ -43,3 +43,15 @@ export interface AIAnalysis {
 }
 
 export type ViewType = "dashboard" | "measure" | "history" | "ai";
+
+export interface SharedReport {
+  id?: string;
+  authUid: string;
+  patientName: string;
+  patientAge?: number;
+  patientSex?: string;
+  patientBloodGroup?: string;
+  patientAvatar?: string;
+  measurements: VitalMeasurement[];
+  createdAt: string;
+}

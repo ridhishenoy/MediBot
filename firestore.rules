@@ -52,5 +52,12 @@ service cloud.firestore {
       allow create: if isSignedIn() && incoming().authUid == request.auth.uid;
       allow delete: if isSignedIn() && resource.data.authUid == request.auth.uid;
     }
+
+    // Shared Reports
+    match /shared_reports/{reportId} {
+      allow read: if true;
+      allow create: if isSignedIn() && incoming().authUid == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.authUid == request.auth.uid;
+    }
   }
 }

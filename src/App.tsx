@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, getDocs, setDoc, doc, limit, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send } from 'lucide-react';
+import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send, Copy, ExternalLink, Link } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 
@@ -20,11 +20,12 @@ import Navbar from './components/layout/Navbar';
 import VitalCard from './components/dashboard/VitalCard';
 import ActivityChart from './components/dashboard/ActivityChart';
 import Calendar from './components/dashboard/Calendar';
+import SharedReportView from './components/dashboard/SharedReportView';
 
 import { db, auth, signInWithGoogle } from './lib/firebase';
 import { bluetoothService, MediData } from './lib/bluetooth';
 import { analyzeVitals } from './lib/gemini';
-import { UserProfile, VitalMeasurement, ViewType, AIAnalysis, Doctor } from './types';
+import { UserProfile, VitalMeasurement, ViewType, AIAnalysis, Doctor, SharedReport } from './types';
 import { cn } from './lib/utils';
 
 export default function App() {
@@ -49,7 +50,8 @@ export default function App() {
   const [isDoctorsModalOpen, setIsDoctorsModalOpen] = useState(false);
   const [isAddDoctorModalOpen, setIsAddDoctorModalOpen] = useState(false);
   const [selectedDoctorForEmail, setSelectedDoctorForEmail] = useState<Doctor | null>(null);
-  const [emailTimePeriod, setEmailTimePeriod] = useState<'week' | 'month' | 'all'>('week');
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
 
   const defaultDoctors: Doctor[] = [
     { id: '1', name: 'Dr. Aurelien', seed: 'Aurelien', specialty: 'Cardiology', phone: '+1234567890', email: 'aurelien@medibot.com' },
@@ -264,40 +266,47 @@ export default function App() {
     }
   };
 
-  const handleSendRecords = (doctorEmail: string, period: 'week' | 'month' | 'all') => {
-    const now = new Date();
-    let filtered = [...measurements];
-    if (period === 'week') {
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      filtered = filtered.filter(m => new Date(m.timestamp) >= oneWeekAgo);
-    } else if (period === 'month') {
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      filtered = filtered.filter(m => new Date(m.timestamp) >= thirtyDaysAgo);
+  const handleSendRecords = async (doctorEmail: string) => {
+    if (!profile || !user) return;
+
+    setIsGeneratingLink(true);
+    try {
+      const reportData: SharedReport = {
+        authUid: user.uid,
+        patientName: profile.name,
+        patientAge: profile.age,
+        patientSex: profile.sex,
+        patientBloodGroup: profile.bloodGroup,
+        patientAvatar: profile.avatarUrl,
+        measurements: measurements.slice(-1000), // Limit to recent 1000 records
+        createdAt: new Date().toISOString()
+      };
+
+      const newReportRef = await addDoc(collection(db, 'shared_reports'), reportData);
+      const link = `${window.location.origin}/?report=${newReportRef.id}`;
+      setGeneratedLink(link);
+    } catch (e) {
+      console.error("Failed to generate report", e);
+      alert("Failed to generate report link.");
+    } finally {
+      setIsGeneratingLink(false);
     }
-    
-    if (filtered.length === 0) {
-      alert("No records found for the selected period.");
-      return;
+  };
+
+  const handleCopyLink = () => {
+    if (generatedLink) {
+      navigator.clipboard.writeText(generatedLink);
+      alert("Link copied to clipboard!");
     }
+  };
 
-    const headers = "Date,Heart Rate,SpO2,Temperature,Stress\n";
-    const csvContent = headers + filtered.map(m => 
-      `${new Date(m.timestamp).toLocaleString()},${m.heartRate},${m.spo2},${m.temperature},${m.stress}`
-    ).join("\n");
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `medibot_records_${period}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    const subject = encodeURIComponent(`MediBot Health Records - ${profile?.name || 'Patient'}`);
-    const body = encodeURIComponent(`Hello Doctor,\n\nPlease find my health records for the selected period attached to this email. I have downloaded them as a CSV file.\n\nBest regards,\n${profile?.name || 'Patient'}`);
-    window.location.href = `mailto:${doctorEmail}?subject=${subject}&body=${body}`;
-    setSelectedDoctorForEmail(null);
+  const handleOpenGmail = (doctorEmail: string) => {
+    if (generatedLink) {
+      const subject = encodeURIComponent(`MediBot Vitals Report - ${profile?.name || 'Patient'}`);
+      const body = encodeURIComponent(`Hello Doctor,\n\nPlease find the secure link to my interactive health report below.\n\n${generatedLink}\n\nBest regards,\n${profile?.name || 'Patient'}`);
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${doctorEmail}&su=${subject}&body=${body}`;
+      window.open(gmailUrl, '_blank');
+    }
   };
 
 
@@ -439,6 +448,11 @@ export default function App() {
     });
     setIsAnalyzing(false);
   };
+
+  const sharedReportId = new URLSearchParams(window.location.search).get('report');
+  if (sharedReportId) {
+    return <SharedReportView reportId={sharedReportId} />;
+  }
 
   if (!user) {
     return (
@@ -1182,7 +1196,7 @@ export default function App() {
                           <span className="text-[10px] font-bold text-brand-indigo uppercase tracking-wider">{doc.specialty}</span>
                         </div>
                       </div>
-                      
+
                       <div className="flex flex-col gap-2 mb-4">
                         <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                           <Phone size={14} className="text-slate-400" />
@@ -1196,28 +1210,50 @@ export default function App() {
 
                       {selectedDoctorForEmail?.id === doc.id ? (
                         <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
-                          <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest">Select time period:</p>
-                          <select 
-                            className="w-full p-2 text-sm rounded-lg bg-slate-50 dark:bg-slate-800 border-none mb-2 focus:ring-2 focus:ring-brand-indigo/30"
-                            value={emailTimePeriod}
-                            onChange={(e) => setEmailTimePeriod(e.target.value as any)}
-                          >
-                            <option value="week">Past 1 Week</option>
-                            <option value="month">Past 1 Month</option>
-                            <option value="all">All Time</option>
-                          </select>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => handleSendRecords(doc.email, emailTimePeriod)} className="flex-1 py-2 bg-brand-indigo text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-600 transition-colors">
-                              <Send size={14} /> Send
-                            </button>
-                            <button onClick={() => setSelectedDoctorForEmail(null)} className="py-2 px-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-bold transition-colors">
-                              Cancel
-                            </button>
-                          </div>
+                          {generatedLink ? (
+                            <div className="flex flex-col gap-3">
+                              <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest text-center">Link Generated!</p>
+
+                              <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 p-2 rounded-lg border border-slate-100 dark:border-slate-700">
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={generatedLink}
+                                  className="w-full bg-transparent border-none text-xs text-slate-500 focus:ring-0 outline-none truncate"
+                                />
+                                <button onClick={handleCopyLink} className="p-1.5 bg-white dark:bg-slate-700 text-slate-500 hover:text-brand-indigo rounded-md shadow-sm border border-slate-200 dark:border-slate-600 transition-colors" title="Copy Link">
+                                  <Copy size={14} />
+                                </button>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => handleOpenGmail(doc.email)} className="flex-1 py-2 bg-[#EA4335] text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 hover:bg-[#D93025] transition-colors">
+                                  <Send size={14} /> Share via mail
+                                </button>
+                                <button onClick={() => { setSelectedDoctorForEmail(null); setGeneratedLink(null); }} className="py-2 px-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-bold transition-colors">
+                                  Done
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col gap-2">
+                              <p className="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-widest text-center">Secure Share</p>
+                              <p className="text-[11px] text-slate-500 text-center mb-2 leading-tight">Create a secure interactive dashboard link.</p>
+                              <div className="flex items-center gap-2">
+                                <button disabled={isGeneratingLink} onClick={() => handleSendRecords(doc.email)} className="flex-1 py-2 bg-brand-indigo text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-600 transition-colors disabled:opacity-50">
+                                  {isGeneratingLink ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Link size={14} />}
+                                  {isGeneratingLink ? "Generating..." : "Generate"}
+                                </button>
+                                <button onClick={() => setSelectedDoctorForEmail(null)} className="py-2 px-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-bold transition-colors">
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
-                        <button onClick={() => setSelectedDoctorForEmail(doc)} className="w-full py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                          <Download size={16} /> Send Records
+                        <button onClick={() => { setSelectedDoctorForEmail(doc); setGeneratedLink(null); }} className="w-full py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                          <Send size={16} /> Share Records
                         </button>
                       )}
                     </div>
@@ -1265,7 +1301,7 @@ export default function App() {
                     <label className="text-xs font-bold text-slate-400 uppercase ml-1">Email</label>
                     <input name="email" type="email" required placeholder="doctor@hospital.com" className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border-none focus:ring-2 focus:ring-brand-indigo/30" />
                   </div>
-                  
+
                   <button type="submit" className="mt-4 w-full py-4 bg-brand-indigo text-white rounded-2xl font-bold shadow-lg shadow-brand-indigo/30 transition-all hover:scale-[1.02] active:scale-[0.98]">
                     Save Doctor
                   </button>
