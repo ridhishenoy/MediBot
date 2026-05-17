@@ -1,3 +1,12 @@
+export interface Doctor {
+  id: string;
+  name: string;
+  specialty: string;
+  phone: string;
+  email: string;
+  seed: string;
+}
+
 export interface UserProfile {
   userId: string;
   name: string;
@@ -9,6 +18,7 @@ export interface UserProfile {
   avatarUrl?: string;
   createdAt: string;
   isDeleted?: boolean;
+  doctors?: Doctor[];
 }
 
 export interface VitalMeasurement {

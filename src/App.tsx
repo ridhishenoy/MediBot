@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, getDocs, setDoc, doc, limit, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check } from 'lucide-react';
+import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 
@@ -24,7 +24,7 @@ import Calendar from './components/dashboard/Calendar';
 import { db, auth, signInWithGoogle } from './lib/firebase';
 import { bluetoothService, MediData } from './lib/bluetooth';
 import { analyzeVitals } from './lib/gemini';
-import { UserProfile, VitalMeasurement, ViewType, AIAnalysis } from './types';
+import { UserProfile, VitalMeasurement, ViewType, AIAnalysis, Doctor } from './types';
 import { cn } from './lib/utils';
 
 export default function App() {
@@ -46,6 +46,20 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState<'all' | 'week' | 'month' | 'year' | 'manual'>('all');
   const [manualRange, setManualRange] = useState({ from: '', to: '' });
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
+  const [isDoctorsModalOpen, setIsDoctorsModalOpen] = useState(false);
+  const [isAddDoctorModalOpen, setIsAddDoctorModalOpen] = useState(false);
+  const [selectedDoctorForEmail, setSelectedDoctorForEmail] = useState<Doctor | null>(null);
+  const [emailTimePeriod, setEmailTimePeriod] = useState<'week' | 'month' | 'all'>('week');
+
+  const defaultDoctors: Doctor[] = [
+    { id: '1', name: 'Dr. Aurelien', seed: 'Aurelien', specialty: 'Cardiology', phone: '+1234567890', email: 'aurelien@medibot.com' },
+    { id: '2', name: 'Dr. Siamak', seed: 'Siamak', specialty: 'Therapist', phone: '+1234567891', email: 'siamak@medibot.com' },
+    { id: '3', name: 'Dr. Angel', seed: 'Angel', specialty: 'Surgeon', phone: '+1234567892', email: 'angel@medibot.com' },
+    { id: '4', name: 'Dr. Manuel', seed: 'Manuel', specialty: 'General', phone: '+1234567893', email: 'manuel@medibot.com' }
+  ];
+
+  const doctorsList = profile?.doctors?.length ? profile.doctors : defaultDoctors;
+
 
   const filteredHistory = useMemo(() => {
     const now = new Date();
@@ -224,6 +238,68 @@ export default function App() {
     await addDoc(collection(db, 'measurements'), data);
     setIsManualModalOpen(false);
   };
+
+  const handleAddDoctor = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!profile || !user) return;
+
+    const formData = new FormData(e.currentTarget);
+    const newDoctor: Doctor = {
+      id: Date.now().toString(),
+      name: formData.get('name') as string,
+      specialty: formData.get('specialty') as string,
+      phone: formData.get('phone') as string,
+      email: formData.get('email') as string,
+      seed: formData.get('name') as string
+    };
+
+    const updatedDoctors = [...(profile.doctors || []), newDoctor];
+    try {
+      await setDoc(doc(db, 'users', profile.userId), { ...profile, doctors: updatedDoctors }, { merge: true });
+      setProfile({ ...profile, doctors: updatedDoctors });
+      setIsAddDoctorModalOpen(false);
+    } catch (error) {
+      console.error("Error adding doctor", error);
+      alert("Failed to add doctor");
+    }
+  };
+
+  const handleSendRecords = (doctorEmail: string, period: 'week' | 'month' | 'all') => {
+    const now = new Date();
+    let filtered = [...measurements];
+    if (period === 'week') {
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      filtered = filtered.filter(m => new Date(m.timestamp) >= oneWeekAgo);
+    } else if (period === 'month') {
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      filtered = filtered.filter(m => new Date(m.timestamp) >= thirtyDaysAgo);
+    }
+    
+    if (filtered.length === 0) {
+      alert("No records found for the selected period.");
+      return;
+    }
+
+    const headers = "Date,Heart Rate,SpO2,Temperature,Stress\n";
+    const csvContent = headers + filtered.map(m => 
+      `${new Date(m.timestamp).toLocaleString()},${m.heartRate},${m.spo2},${m.temperature},${m.stress}`
+    ).join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `medibot_records_${period}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    const subject = encodeURIComponent(`MediBot Health Records - ${profile?.name || 'Patient'}`);
+    const body = encodeURIComponent(`Hello Doctor,\n\nPlease find my health records for the selected period attached to this email. I have downloaded them as a CSV file.\n\nBest regards,\n${profile?.name || 'Patient'}`);
+    window.location.href = `mailto:${doctorEmail}?subject=${subject}&body=${body}`;
+    setSelectedDoctorForEmail(null);
+  };
+
 
   const handleCreateProfile = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -837,21 +913,16 @@ export default function App() {
 
                 <div className="sleek-card p-6">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-display font-bold text-slate-800 dark:text-slate-100 uppercase tracking-tight">Attending Physicians</h3>
-                    <button className="text-brand-indigo text-[10px] font-bold tracking-widest">SEE ALL</button>
+                    <h3 className="text-sm font-display font-bold text-slate-800 dark:text-slate-100 uppercase tracking-tight">Doctors</h3>
+                    <button onClick={() => setIsDoctorsModalOpen(true)} className="text-brand-indigo text-[10px] font-bold tracking-widest hover:text-indigo-600 transition-colors">SEE ALL</button>
                   </div>
                   <div className="flex items-center gap-4">
-                    {[
-                      { name: 'Dr. Aurelien', seed: 'Aurelien', specialty: 'Cardiology' },
-                      { name: 'Dr. Siamak', seed: 'Siamak', specialty: 'Therapist' },
-                      { name: 'Dr. Angel', seed: 'Angel', specialty: 'Surgeon' },
-                      { name: 'Dr. Manuel', seed: 'Manuel', specialty: 'General' }
-                    ].slice(0, 4).map(doc => (
-                      <div key={doc.name} className="flex flex-col items-center gap-1.5 group cursor-pointer">
+                    {doctorsList.slice(0, 4).map(doc => (
+                      <div key={doc.id} className="flex flex-col items-center gap-1.5 group cursor-pointer" onClick={() => setIsDoctorsModalOpen(true)}>
                         <div className="w-12 h-12 rounded-full border-2 border-white dark:border-slate-800 shadow-sm group-hover:scale-105 transition-transform overflow-hidden">
                           <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${doc.seed}`} alt={doc.name} className="w-full h-full" />
                         </div>
-                        <span className="text-[9px] font-bold text-slate-500 text-center leading-tight whitespace-nowrap">{doc.name.split('. ')[1]}</span>
+                        <span className="text-[9px] font-bold text-slate-500 text-center leading-tight whitespace-nowrap">{doc.name.split('. ')[1] || doc.name}</span>
                       </div>
                     ))}
                   </div>
@@ -1072,6 +1143,133 @@ export default function App() {
                     Record Vitals
                   </button>
                   <button type="button" onClick={() => setIsManualModalOpen(false)} className="text-slate-400 text-sm font-medium hover:text-slate-600 transition-colors">Cancel</button>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Doctors Modal */}
+        <AnimatePresence>
+          {isDoctorsModalOpen && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+              >
+                <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-brand-indigo text-white rounded-xl flex items-center justify-center"><Stethoscope /></div>
+                    <h2 className="text-2xl font-display font-bold">My Doctors</h2>
+                  </div>
+                  <button onClick={() => setIsAddDoctorModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-indigo-50 dark:bg-brand-indigo/10 text-brand-indigo rounded-xl font-bold hover:bg-indigo-100 dark:hover:bg-brand-indigo/20 transition-colors">
+                    <Plus size={18} />
+                    Add Doctor
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {doctorsList.map(doc => (
+                    <div key={doc.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center gap-4 mb-4">
+                        <div className="w-12 h-12 rounded-full overflow-hidden bg-white dark:bg-slate-800">
+                          <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${doc.seed}`} alt={doc.name} className="w-full h-full" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-slate-800 dark:text-slate-100">{doc.name}</h4>
+                          <span className="text-[10px] font-bold text-brand-indigo uppercase tracking-wider">{doc.specialty}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex flex-col gap-2 mb-4">
+                        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                          <Phone size={14} className="text-slate-400" />
+                          <span>{doc.phone}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                          <Mail size={14} className="text-slate-400" />
+                          <span>{doc.email}</span>
+                        </div>
+                      </div>
+
+                      {selectedDoctorForEmail?.id === doc.id ? (
+                        <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+                          <p className="text-[10px] font-bold text-slate-500 mb-2 uppercase tracking-widest">Select time period:</p>
+                          <select 
+                            className="w-full p-2 text-sm rounded-lg bg-slate-50 dark:bg-slate-800 border-none mb-2 focus:ring-2 focus:ring-brand-indigo/30"
+                            value={emailTimePeriod}
+                            onChange={(e) => setEmailTimePeriod(e.target.value as any)}
+                          >
+                            <option value="week">Past 1 Week</option>
+                            <option value="month">Past 1 Month</option>
+                            <option value="all">All Time</option>
+                          </select>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleSendRecords(doc.email, emailTimePeriod)} className="flex-1 py-2 bg-brand-indigo text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 hover:bg-indigo-600 transition-colors">
+                              <Send size={14} /> Send
+                            </button>
+                            <button onClick={() => setSelectedDoctorForEmail(null)} className="py-2 px-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-bold transition-colors">
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => setSelectedDoctorForEmail(doc)} className="w-full py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                          <Download size={16} /> Send Records
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-8 text-right">
+                  <button onClick={() => setIsDoctorsModalOpen(false)} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors">
+                    Close
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Add Doctor Modal */}
+        <AnimatePresence>
+          {isAddDoctorModalOpen && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-10 max-w-sm w-full shadow-2xl"
+              >
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="w-12 h-12 bg-brand-indigo text-white rounded-xl flex items-center justify-center"><UserPlus /></div>
+                  <h2 className="text-2xl font-display font-bold">Add Doctor</h2>
+                </div>
+                <form onSubmit={handleAddDoctor} className="flex flex-col gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400 uppercase ml-1">Doctor Name</label>
+                    <input name="name" required placeholder="Dr. John Doe" className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border-none focus:ring-2 focus:ring-brand-indigo/30" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400 uppercase ml-1">Specialty</label>
+                    <input name="specialty" required placeholder="Cardiology" className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border-none focus:ring-2 focus:ring-brand-indigo/30" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400 uppercase ml-1">Phone Number</label>
+                    <input name="phone" required placeholder="+1 234 567 8900" className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border-none focus:ring-2 focus:ring-brand-indigo/30" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400 uppercase ml-1">Email</label>
+                    <input name="email" type="email" required placeholder="doctor@hospital.com" className="w-full p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border-none focus:ring-2 focus:ring-brand-indigo/30" />
+                  </div>
+                  
+                  <button type="submit" className="mt-4 w-full py-4 bg-brand-indigo text-white rounded-2xl font-bold shadow-lg shadow-brand-indigo/30 transition-all hover:scale-[1.02] active:scale-[0.98]">
+                    Save Doctor
+                  </button>
+                  <button type="button" onClick={() => setIsAddDoctorModalOpen(false)} className="text-slate-400 text-sm font-medium hover:text-slate-600 transition-colors">Cancel</button>
                 </form>
               </motion.div>
             </div>
