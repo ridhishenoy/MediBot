@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "medibot-dashboard",
     "public": "dist",
     "ignore": [
       "firebase.json",
