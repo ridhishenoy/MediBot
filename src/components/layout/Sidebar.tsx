@@ -45,12 +45,18 @@ export default function Sidebar({ currentView, onViewChange, onSignOut }: Sideba
         ))}
       </nav>
 
-      <div className="flex flex-col gap-6 mb-4">
-        <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+      <div className="flex flex-col gap-2 mb-4">
+        <button className="w-12 h-12 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group relative">
           <Settings size={22} />
+          <span className="absolute left-16 px-2.5 py-1.5 bg-slate-800 text-white text-[10px] font-bold tracking-wider uppercase rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[60]">
+            Settings
+          </span>
         </button>
-        <button onClick={onSignOut} className="text-slate-400 hover:text-rose-500 transition-colors">
+        <button onClick={onSignOut} className="w-12 h-12 flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-all group relative">
           <LogOut size={22} />
+          <span className="absolute left-16 px-2.5 py-1.5 bg-slate-800 text-white text-[10px] font-bold tracking-wider uppercase rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[60]">
+            Sign Out
+          </span>
         </button>
       </div>
     </div>
