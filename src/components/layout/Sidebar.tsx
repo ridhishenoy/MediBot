@@ -6,9 +6,10 @@ interface SidebarProps {
   currentView: ViewType;
   onViewChange: (view: ViewType) => void;
   onSignOut: () => void;
+  onOpenSettings: () => void;
 }
 
-export default function Sidebar({ currentView, onViewChange, onSignOut }: SidebarProps) {
+export default function Sidebar({ currentView, onViewChange, onSignOut, onOpenSettings }: SidebarProps) {
   const items = [
     { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { id: 'measure', icon: Activity, label: 'Measure' },
@@ -46,7 +47,7 @@ export default function Sidebar({ currentView, onViewChange, onSignOut }: Sideba
       </nav>
 
       <div className="flex flex-col gap-2 mb-4">
-        <button className="w-12 h-12 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group relative">
+        <button onClick={onOpenSettings} className="w-12 h-12 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group relative">
           <Settings size={22} />
           <span className="absolute left-16 px-2.5 py-1.5 bg-slate-800 text-white text-[10px] font-bold tracking-wider uppercase rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-[60]">
             Settings

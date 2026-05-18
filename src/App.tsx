@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, getDocs, setDoc, doc, limit, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send, Copy, ExternalLink, Link, AlertTriangle } from 'lucide-react';
+import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send, Copy, ExternalLink, Link, AlertTriangle, Settings, Bell, Database, Sliders, Palette } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 
@@ -54,6 +54,7 @@ export default function App() {
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isDoctorsModalOpen, setIsDoctorsModalOpen] = useState(false);
   const [isAddDoctorModalOpen, setIsAddDoctorModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [selectedDoctorForEmail, setSelectedDoctorForEmail] = useState<Doctor | null>(null);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
@@ -121,6 +122,95 @@ export default function App() {
     const icons: any = { Droplets, Activity, Heart };
     const IconComponent = icons[name] || Activity;
     return <IconComponent {...props} />;
+  };
+
+  const exportToCSV = () => {
+    if (measurements.length === 0) return alert("No data to export");
+    const headers = ["Date", "Time", "Heart Rate (BPM)", "SpO2 (%)", "Temperature (°C)", "Stress Level"];
+    const rows = measurements.map(m => {
+      const d = new Date(m.timestamp);
+      return [
+        d.toLocaleDateString(),
+        d.toLocaleTimeString(),
+        m.heartRate,
+        m.spo2,
+        m.temperature,
+        m.stress
+      ].join(",");
+    });
+    
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `MediBot_Vitals_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+  };
+
+  const exportToPDF = () => {
+    if (measurements.length === 0) return alert("No data to export");
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return alert("Pop-up blocker is preventing the PDF generation");
+    
+    let html = `
+      <html>
+        <head>
+          <title>MediBot Vitals Report</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; padding: 40px; color: #1e293b; }
+            h1 { color: #4338ca; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #cbd5e1; padding: 12px; text-align: left; }
+            th { background-color: #f8fafc; color: #475569; }
+            tr:nth-child(even) { background-color: #f1f5f9; }
+          </style>
+        </head>
+        <body>
+          <h1>MediBot Vitals Report</h1>
+          <p><strong>Patient:</strong> ${profile?.name || 'Unknown'}</p>
+          <p><strong>Generated on:</strong> ${new Date().toLocaleString()}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Heart Rate (BPM)</th>
+                <th>SpO2 (%)</th>
+                <th>Temp (°C)</th>
+                <th>Stress</th>
+              </tr>
+            </thead>
+            <tbody>
+    `;
+
+    measurements.forEach(m => {
+      const d = new Date(m.timestamp);
+      html += `
+        <tr>
+          <td>${d.toLocaleDateString()}</td>
+          <td>${d.toLocaleTimeString()}</td>
+          <td>${m.heartRate}</td>
+          <td>${m.spo2}</td>
+          <td>${m.temperature}</td>
+          <td>${m.stress}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() { 
+              setTimeout(function() { window.print(); window.close(); }, 500);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+    
+    printWindow.document.write(html);
+    printWindow.document.close();
   };
 
 
@@ -563,7 +653,7 @@ export default function App() {
   return (
     <div className={cn("min-h-screen", darkMode && "dark")}>
       <div className="dark:bg-slate-950 transition-colors duration-300 min-h-screen">
-        <Sidebar currentView={currentView} onViewChange={setCurrentView} onSignOut={handleSignOut} />
+        <Sidebar currentView={currentView} onViewChange={setCurrentView} onSignOut={handleSignOut} onOpenSettings={() => setIsSettingsModalOpen(true)} />
 
         <main className={cn("pl-20 transition-all", isProfileModalOpen || isManualModalOpen ? "blur-sm" : "")}>
           <Navbar
@@ -1433,6 +1523,114 @@ export default function App() {
                     <button type="button" onClick={() => setIsRegimentModalOpen(false)} className="mt-3 w-full text-slate-400 text-sm font-medium hover:text-slate-600 transition-colors">Cancel</button>
                   </div>
                 </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Settings Modal */}
+        <AnimatePresence>
+          {isSettingsModalOpen && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-10 max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+              >
+                <div className="flex items-center gap-4 mb-8">
+                  <div className="w-12 h-12 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl flex items-center justify-center"><Settings /></div>
+                  <div>
+                    <h2 className="text-2xl font-display font-bold text-slate-800 dark:text-slate-100">Settings</h2>
+                    <p className="text-sm text-slate-500">Manage your MediBot preferences</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Appearance */}
+                  <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <Palette className="text-brand-purple" size={20} />
+                      <h3 className="font-bold text-slate-800 dark:text-slate-100">Appearance</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Theme</label>
+                        <select className="w-full p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm outline-none hover:border-brand-indigo/30 transition-colors cursor-pointer">
+                          <option>System Default</option>
+                          <option>Light Mode</option>
+                          <option>Dark Mode</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Accent Color</label>
+                        <div className="flex gap-2">
+                          <div className="w-8 h-8 rounded-full bg-brand-indigo ring-2 ring-brand-indigo ring-offset-2 dark:ring-offset-slate-800 cursor-pointer hover:scale-110 transition-transform"></div>
+                          <div className="w-8 h-8 rounded-full bg-rose-500 cursor-pointer hover:scale-110 transition-transform"></div>
+                          <div className="w-8 h-8 rounded-full bg-emerald-500 cursor-pointer hover:scale-110 transition-transform"></div>
+                          <div className="w-8 h-8 rounded-full bg-cyan-500 cursor-pointer hover:scale-110 transition-transform"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Notifications */}
+                  <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <Bell className="text-rose-500" size={20} />
+                      <h3 className="font-bold text-slate-800 dark:text-slate-100">Alerts</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">High Heart Rate Threshold</label>
+                        <input type="number" defaultValue={100} className="w-full p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm outline-none focus:ring-2 focus:ring-brand-indigo/30 transition-all" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Low SpO2 Threshold</label>
+                        <input type="number" defaultValue={95} className="w-full p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm outline-none focus:ring-2 focus:ring-brand-indigo/30 transition-all" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI config */}
+                  <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <BrainCircuit className="text-brand-blue" size={20} />
+                      <h3 className="font-bold text-slate-800 dark:text-slate-100">AI Analysis</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">AI Model</label>
+                        <select className="w-full p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm outline-none hover:border-brand-indigo/30 transition-colors cursor-pointer">
+                          <option>Groq Llama 3 (Fast)</option>
+                          <option>Gemini 1.5 Pro (Detailed)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Data Management */}
+                  <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <Database className="text-emerald-500" size={20} />
+                      <h3 className="font-bold text-slate-800 dark:text-slate-100">Data Export</h3>
+                    </div>
+                    <div className="space-y-3">
+                      <button onClick={exportToCSV} className="w-full py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2 hover:border-brand-indigo hover:text-brand-indigo transition-colors">
+                        <Download size={16} /> Export as CSV
+                      </button>
+                      <button onClick={exportToPDF} className="w-full py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-600 dark:text-slate-300 flex items-center justify-center gap-2 hover:border-brand-indigo hover:text-brand-indigo transition-colors">
+                        <Download size={16} /> Export as PDF
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-8 flex justify-end">
+                  <button onClick={() => setIsSettingsModalOpen(false)} className="px-8 py-3 bg-brand-indigo text-white font-bold rounded-xl hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-500/30">
+                    Done
+                  </button>
+                </div>
               </motion.div>
             </div>
           )}
