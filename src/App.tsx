@@ -35,7 +35,10 @@ export default function App() {
   const [allProfiles, setAllProfiles] = useState<UserProfile[]>([]);
   const [measurements, setMeasurements] = useState<VitalMeasurement[]>([]);
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    const savedTheme = localStorage.getItem('theme');
+    return savedTheme === 'dark';
+  });
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [liveData, setLiveData] = useState<Partial<VitalMeasurement> | null>(null);
@@ -103,9 +106,11 @@ export default function App() {
     if (darkMode) {
       document.body.classList.add('dark');
       document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
     } else {
       document.body.classList.remove('dark');
       document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
     }
   }, [darkMode]);
 
