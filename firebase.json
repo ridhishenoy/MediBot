@@ -1,4 +1,10 @@
 {
+  "firestore": {
+    "rules": "firestore.rules",
+    "edition": "enterprise",
+    "database": "ai-studio-8876afb4-41ba-4ef0-a53f-52d265734f57",
+    "location": "asia-southeast1"
+  },
   "hosting": {
     "site": "medibot-dashboard",
     "public": "dist",
