@@ -27,6 +27,8 @@ import { bluetoothService, MediData } from './lib/bluetooth';
 import { analyzeVitals, analyzeVitalsRange, chatWithCoach, type RangeAnalysisResult } from './lib/gemini';
 import { UserProfile, VitalMeasurement, ViewType, AIAnalysis, Doctor, SharedReport, RegimentItem } from './types';
 import { cn } from './lib/utils';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function App() {
   // State
@@ -183,68 +185,35 @@ export default function App() {
 
   const exportToPDF = () => {
     if (measurements.length === 0) return alert("No data to export");
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return alert("Pop-up blocker is preventing the PDF generation");
-    
-    let html = `
-      <html>
-        <head>
-          <title>MediBot Vitals Report</title>
-          <style>
-            body { font-family: system-ui, -apple-system, sans-serif; padding: 40px; color: #1e293b; }
-            h1 { color: #4338ca; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #cbd5e1; padding: 12px; text-align: left; }
-            th { background-color: #f8fafc; color: #475569; }
-            tr:nth-child(even) { background-color: #f1f5f9; }
-          </style>
-        </head>
-        <body>
-          <h1>MediBot Vitals Report</h1>
-          <p><strong>Patient:</strong> ${profile?.name || 'Unknown'}</p>
-          <p><strong>Generated on:</strong> ${new Date().toLocaleString()}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Heart Rate (BPM)</th>
-                <th>SpO2 (%)</th>
-                <th>Temp (°C)</th>
-                <th>Stress</th>
-              </tr>
-            </thead>
-            <tbody>
-    `;
 
-    measurements.forEach(m => {
-      const d = new Date(m.timestamp);
-      html += `
-        <tr>
-          <td>${d.toLocaleDateString()}</td>
-          <td>${d.toLocaleTimeString()}</td>
-          <td>${m.heartRate}</td>
-          <td>${m.spo2}</td>
-          <td>${m.temperature}</td>
-          <td>${m.stress}</td>
-        </tr>
-      `;
+    const doc = new jsPDF();
+    doc.setFontSize(16);
+    doc.setTextColor(67, 56, 202);
+    doc.text('MediBot Vitals Report', 14, 20);
+    doc.setFontSize(11);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`Patient: ${profile?.name || 'Unknown'}`, 14, 28);
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 34);
+
+    autoTable(doc, {
+      startY: 42,
+      head: [['Date', 'Time', 'Heart Rate (BPM)', 'SpO2 (%)', 'Temp (°C)', 'Stress']],
+      body: measurements.map(m => {
+        const d = new Date(m.timestamp);
+        return [
+          d.toLocaleDateString(),
+          d.toLocaleTimeString(),
+          String(m.heartRate),
+          String(m.spo2),
+          String(m.temperature),
+          m.stress,
+        ];
+      }),
+      headStyles: { fillColor: [248, 250, 252], textColor: [71, 85, 105] },
+      alternateRowStyles: { fillColor: [241, 245, 249] },
     });
 
-    html += `
-            </tbody>
-          </table>
-          <script>
-            window.onload = function() { 
-              setTimeout(function() { window.print(); window.close(); }, 500);
-            }
-          </script>
-        </body>
-      </html>
-    `;
-    
-    printWindow.document.write(html);
-    printWindow.document.close();
+    doc.save(`MediBot_Vitals_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
 
