@@ -8,10 +8,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { collection, query, where, orderBy, onSnapshot, addDoc, getDocs, setDoc, doc, limit, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send, Copy, ExternalLink, Link, AlertTriangle, Settings, Bell, Database, Sliders, Palette } from 'lucide-react';
+import { Heart, Droplets, Thermometer, Plus, UserPlus, Users, Rocket, MoreHorizontal, ArrowRight, BrainCircuit, Activity, Bluetooth, History, Trash2, ListFilter, ChevronDown, Calendar as CalendarIcon, Check, Stethoscope, Mail, Phone, Download, Send, Copy, ExternalLink, Link, AlertTriangle, Settings, Bell, Database, Sliders, Palette, Sparkles, MessageSquare, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 
@@ -24,7 +24,7 @@ import SharedReportView from './components/dashboard/SharedReportView';
 
 import { db, auth, signInWithGoogle } from './lib/firebase';
 import { bluetoothService, MediData } from './lib/bluetooth';
-import { analyzeVitals } from './lib/gemini';
+import { analyzeVitals, analyzeVitalsRange, chatWithCoach, type RangeAnalysisResult } from './lib/gemini';
 import { UserProfile, VitalMeasurement, ViewType, AIAnalysis, Doctor, SharedReport, RegimentItem } from './types';
 import { cn } from './lib/utils';
 
@@ -59,6 +59,27 @@ export default function App() {
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [isGeneratingLink, setIsGeneratingLink] = useState(false);
 
+  // AI Analysis Hub States
+  const [aiRangeFilter, setAiRangeFilter] = useState<'week' | 'month' | 'custom'>('week');
+  const [aiManualRange, setAiManualRange] = useState({ from: '', to: '' });
+  const [rangeAnalysis, setRangeAnalysis] = useState<RangeAnalysisResult | null>(null);
+  const [isRangeAnalyzing, setIsRangeAnalyzing] = useState(false);
+  const [rangeAnalysisError, setRangeAnalysisError] = useState<string | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isLoadingLastAnalysis, setIsLoadingLastAnalysis] = useState(false);
+  const [rangeAnalysisCache, setRangeAnalysisCache] = useState<Record<string, RangeAnalysisResult>>({});
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: 'user' | 'model'; text: string; timestamp: string }>>([
+    {
+      id: '1',
+      role: 'model',
+      text: "Hello! I am your personal AI health coach, MediCoach. I can help analyze your vitals trends, explain your metrics, or suggest daily habits based on your patient data. Ask me anything about your vitals history!",
+      timestamp: new Date().toISOString()
+    }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatSending, setIsChatSending] = useState(false);
+
+
   const defaultDoctors: Doctor[] = [
     { id: '1', name: 'Dr. Aurelien', seed: 'Aurelien', specialty: 'Cardiology', phone: '+1234567890', email: 'aurelien@medibot.com' },
     { id: '2', name: 'Dr. Siamak', seed: 'Siamak', specialty: 'Therapist', phone: '+1234567891', email: 'siamak@medibot.com' },
@@ -76,7 +97,7 @@ export default function App() {
     { id: '3', title: 'Sleep Routine', sub: '8h Deep Rest', icon: 'Heart', color: 'text-rose-500 bg-rose-50 dark:bg-rose-900/20', completed: false, lastUpdated: new Date().toISOString() }
   ];
 
-  const currentRegiment = profile?.regiment?.length ? profile.regiment : defaultRegiment;
+  const currentRegiment = (profile && 'regiment' in profile && Array.isArray(profile.regiment)) ? profile.regiment : defaultRegiment;
 
   const isCompletedToday = useCallback((item: RegimentItem) => {
     if (!item.completed) return false;
@@ -115,6 +136,19 @@ export default function App() {
     } catch (e) {
       console.error(e);
       alert("Failed to save regiment");
+    }
+  };
+
+  const handleDeleteRegiment = async (id: string) => {
+    if (!profile) return;
+    if (!window.confirm("Are you sure you want to delete this daily goal?")) return;
+    const updated = currentRegiment.filter(item => item.id !== id);
+    try {
+      await setDoc(doc(db, 'users', profile.userId), { ...profile, regiment: updated }, { merge: true });
+      setProfile({ ...profile, regiment: updated });
+    } catch (e) {
+      console.error(e);
+      alert("Failed to delete goal");
     }
   };
 
@@ -242,6 +276,279 @@ export default function App() {
     return filtered.reverse();
   }, [measurements, historyFilter, manualRange]);
 
+  // AI Analysis Hub Event Handlers & Effects
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchRangeAnalysis = async (filter: 'week' | 'month' | 'custom', manualRangeVal?: { from: string; to: string }) => {
+    if (!profile || !user) return;
+    setIsRangeAnalyzing(true);
+    setRangeAnalysisError(null);
+
+    try {
+      let startDate = new Date();
+      if (filter === 'week') {
+        startDate.setDate(startDate.getDate() - 7);
+      } else if (filter === 'month') {
+        startDate.setDate(startDate.getDate() - 30);
+      } else if (filter === 'custom' && manualRangeVal) {
+        if (manualRangeVal.from) startDate = new Date(manualRangeVal.from);
+      }
+
+      let endDate = new Date();
+      if (filter === 'custom' && manualRangeVal?.to) {
+        endDate = new Date(manualRangeVal.to);
+        endDate.setHours(23, 59, 59, 999);
+      }
+
+      const q = query(
+        collection(db, 'measurements'),
+        where('authUid', '==', user.uid),
+        where('userId', '==', profile.userId),
+        orderBy('timestamp', 'asc')
+      );
+      
+      const snap = await getDocs(q);
+      let rangeMeasurements = snap.docs.map(d => ({ id: d.id, ...d.data() } as VitalMeasurement));
+      
+      rangeMeasurements = rangeMeasurements.filter(m => {
+        const mDate = new Date(m.timestamp);
+        return mDate >= startDate && mDate <= endDate;
+      });
+
+      if (rangeMeasurements.length === 0) {
+        setRangeAnalysis(null);
+        setRangeAnalysisError("No vitals data found for the selected timeframe. Try measuring some vitals or adjusting the dates.");
+        setIsRangeAnalyzing(false);
+        return;
+      }
+
+      const result = await analyzeVitalsRange(rangeMeasurements, profile);
+      if (typeof result === 'string') {
+        setRangeAnalysisError(result);
+        setRangeAnalysis(null);
+      } else {
+        setRangeAnalysis(result);
+        
+        // Cache to in-memory state
+        const cacheKey = `${filter}-${manualRangeVal?.from || ''}-${manualRangeVal?.to || ''}`;
+        setRangeAnalysisCache(prev => ({ ...prev, [cacheKey]: result }));
+        
+        // Cache to Firestore
+        try {
+          await addDoc(collection(db, 'analyses'), {
+            userId: profile.userId,
+            authUid: user.uid,
+            timestamp: new Date().toISOString(),
+            type: 'range',
+            rangeFilter: filter,
+            manualRange: filter === 'custom' ? manualRangeVal : null,
+            result: result
+          });
+        } catch (dbErr) {
+          console.error("Failed to cache range analysis to Firestore:", dbErr);
+        }
+      }
+    } catch (error: any) {
+      console.error("Error fetching range analysis:", error);
+      setRangeAnalysisError(error?.message || "An unexpected error occurred while analyzing.");
+      setRangeAnalysis(null);
+    } finally {
+      setIsRangeAnalyzing(false);
+    }
+  };
+
+  const loadLastRangeAnalysis = async (filter: 'week' | 'month' | 'custom', manualRangeVal?: { from: string; to: string }) => {
+    if (!profile || !user) return;
+    
+    // For custom filter, don't run load if manual bounds are not fully entered
+    if (filter === 'custom' && (!manualRangeVal?.from || !manualRangeVal?.to)) {
+      setRangeAnalysis(null);
+      setRangeAnalysisError(null);
+      return;
+    }
+
+    // In-memory cache hit check
+    const cacheKey = `${filter}-${manualRangeVal?.from || ''}-${manualRangeVal?.to || ''}`;
+    if (rangeAnalysisCache[cacheKey]) {
+      setRangeAnalysis(rangeAnalysisCache[cacheKey]);
+      setRangeAnalysisError(null);
+      return;
+    }
+
+    setIsLoadingLastAnalysis(true);
+    setRangeAnalysisError(null);
+    try {
+      const q = query(
+        collection(db, 'analyses'),
+        where('authUid', '==', user.uid),
+        where('userId', '==', profile.userId),
+        where('type', '==', 'range'),
+        where('rangeFilter', '==', filter)
+      );
+      const snap = await getDocs(q);
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      
+      // Sort in-memory to avoid needing composite indexes in Firestore
+      docs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      if (filter === 'custom' && manualRangeVal) {
+        // Find the one matching the same from and to dates
+        const match = docs.find(d => d.manualRange?.from === manualRangeVal.from && d.manualRange?.to === manualRangeVal.to);
+        if (match) {
+          setRangeAnalysis(match.result);
+          setRangeAnalysisCache(prev => ({ ...prev, [cacheKey]: match.result }));
+          setIsLoadingLastAnalysis(false);
+          return;
+        }
+      } else if (docs.length > 0) {
+        setRangeAnalysis(docs[0].result);
+        setRangeAnalysisCache(prev => ({ ...prev, [cacheKey]: docs[0].result }));
+        setIsLoadingLastAnalysis(false);
+        return;
+      }
+      
+      // If none found, reset rangeAnalysis so they can run a new one
+      setRangeAnalysis(null);
+    } catch (err: any) {
+      console.error("Error loading last range analysis:", err);
+      setRangeAnalysisError("Failed to load previously saved analysis.");
+    } finally {
+      setIsLoadingLastAnalysis(false);
+    }
+  };
+
+  const handleReAnalyze = () => {
+    fetchRangeAnalysis(aiRangeFilter, aiManualRange);
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim() || isChatSending || !profile) return;
+
+    const userMsgText = chatInput.trim();
+    setChatInput('');
+
+    const newUserMessage = {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      text: userMsgText,
+      timestamp: new Date().toISOString()
+    };
+
+    setChatMessages(prev => [...prev, newUserMessage]);
+    setIsChatSending(true);
+
+    try {
+      const apiHistory = chatMessages.map(m => ({
+        role: m.role,
+        text: m.text
+      }));
+
+      const replyText = await chatWithCoach(apiHistory, userMsgText, measurements, profile);
+
+      const coachReply = {
+        id: (Date.now() + 1).toString(),
+        role: 'model' as const,
+        text: replyText,
+        timestamp: new Date().toISOString()
+      };
+
+      setChatMessages(prev => [...prev, coachReply]);
+    } catch (error: any) {
+      console.error("Chat error:", error);
+      const errorReply = {
+        id: (Date.now() + 1).toString(),
+        role: 'model' as const,
+        text: `Sorry, I am having trouble connecting: ${error?.message || 'Unknown error'}. Please try again!`,
+        timestamp: new Date().toISOString()
+      };
+      setChatMessages(prev => [...prev, errorReply]);
+    } finally {
+      setIsChatSending(false);
+    }
+  };
+
+  const handleChipClick = async (text: string) => {
+    if (isChatSending || !profile) return;
+
+    const newUserMessage = {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      text: text,
+      timestamp: new Date().toISOString()
+    };
+
+    setChatMessages(prev => [...prev, newUserMessage]);
+    setIsChatSending(true);
+
+    try {
+      const apiHistory = chatMessages.map(m => ({
+        role: m.role,
+        text: m.text
+      }));
+
+      const replyText = await chatWithCoach(apiHistory, text, measurements, profile);
+
+      const coachReply = {
+        id: (Date.now() + 1).toString(),
+        role: 'model' as const,
+        text: replyText,
+        timestamp: new Date().toISOString()
+      };
+
+      setChatMessages(prev => [...prev, coachReply]);
+    } catch (error: any) {
+      console.error("Chat error:", error);
+      const errorReply = {
+        id: (Date.now() + 1).toString(),
+        role: 'model' as const,
+        text: `Sorry, I am having trouble connecting: ${error?.message || 'Unknown error'}. Please try again!`,
+        timestamp: new Date().toISOString()
+      };
+      setChatMessages(prev => [...prev, errorReply]);
+    } finally {
+      setIsChatSending(false);
+    }
+  };
+
+  const handleSyncRecommendation = async (rec: { title: string; sub: string; icon: 'Droplets' | 'Activity' | 'Heart'; color: string }) => {
+    if (!profile) return;
+
+    const newRec: RegimentItem = {
+      id: `rec-${Date.now()}`,
+      title: rec.title,
+      sub: rec.sub,
+      icon: rec.icon,
+      color: rec.color,
+      completed: false,
+      lastUpdated: new Date().toISOString()
+    };
+
+    const exists = currentRegiment.some(item => item.title.toLowerCase() === rec.title.toLowerCase());
+    if (exists) {
+      alert(`"${rec.title}" is already in your Daily Regiment.`);
+      return;
+    }
+
+    const updated = [...currentRegiment, newRec];
+
+    try {
+      await setDoc(doc(db, 'users', profile.userId), { ...profile, regiment: updated }, { merge: true });
+      setProfile({ ...profile, regiment: updated });
+      alert(`Successfully synced "${rec.title}" to your Daily Regiment!`);
+    } catch (error) {
+      console.error("Error syncing recommendation:", error);
+      alert("Failed to sync recommendation to your Daily Regiment.");
+    }
+  };
+
+  // Auto-scroll coach chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, isChatSending]);
+
+
+
   // Save selected profile to localStorage
   useEffect(() => {
     if (profile) {
@@ -324,6 +631,26 @@ export default function App() {
       }
     });
   }, [profile, measurements]);
+
+  // Clear range analysis cache when profile/user changes
+  useEffect(() => {
+    setRangeAnalysisCache({});
+    setRangeAnalysis(null);
+  }, [profile, user]);
+
+  // Load last range analysis when view/filter/profile changes
+  useEffect(() => {
+    if (currentView === 'ai') {
+      loadLastRangeAnalysis(aiRangeFilter, aiManualRange);
+    }
+  }, [currentView, aiRangeFilter, profile, user]);
+
+  // Load custom range analysis when dates are completed
+  useEffect(() => {
+    if (currentView === 'ai' && aiRangeFilter === 'custom' && aiManualRange.from && aiManualRange.to) {
+      loadLastRangeAnalysis('custom', aiManualRange);
+    }
+  }, [aiManualRange.from, aiManualRange.to]);
 
   // Finger Removed Timeout Logic
   useEffect(() => {
@@ -794,7 +1121,7 @@ export default function App() {
                         {currentRegiment.map((item) => {
                           const completed = isCompletedToday(item);
                           return (
-                            <div key={item.id} className={cn("flex items-center justify-between p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border transition-all cursor-pointer", completed ? "border-emerald-500/50 bg-emerald-50/50 dark:bg-emerald-900/20" : "border-slate-100 dark:border-slate-800/50 hover:border-brand-indigo/30")} onClick={() => handleToggleRegiment(item.id)}>
+                            <div key={item.id} className={cn("flex items-center justify-between p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border transition-all cursor-pointer group", completed ? "border-emerald-500/50 bg-emerald-50/50 dark:bg-emerald-900/20" : "border-slate-100 dark:border-slate-800/50 hover:border-brand-indigo/30")} onClick={() => handleToggleRegiment(item.id)}>
                               <div className="flex items-center gap-4">
                                 <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center transition-all", completed ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400 scale-110" : item.color)}>
                                   {completed ? <Check size={18} /> : renderIcon(item.icon, { size: 18 })}
@@ -804,8 +1131,20 @@ export default function App() {
                                   <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">{item.sub}</p>
                                 </div>
                               </div>
-                              <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all", completed ? "border-emerald-500 bg-emerald-500" : "border-slate-300 dark:border-slate-600")}>
-                                {completed && <Check size={12} className="text-white" />}
+                              <div className="flex items-center gap-2">
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteRegiment(item.id);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all"
+                                  title="Delete Goal"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                                <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all shrink-0", completed ? "border-emerald-500 bg-emerald-500" : "border-slate-300 dark:border-slate-600")}>
+                                  {completed && <Check size={12} className="text-white" />}
+                                </div>
                               </div>
                             </div>
                           );
@@ -1103,6 +1442,289 @@ export default function App() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {currentView === 'ai' && (
+                <div className="flex flex-col gap-8 w-full">
+                  {/* Top Bar / Header */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div>
+                      <div className="flex items-center gap-3 mb-1">
+                        <BrainCircuit className="text-brand-indigo" size={36} />
+                        <h2 className="text-3xl md:text-4xl font-bold text-slate-800 dark:text-slate-100 font-display">AI Analysis Hub</h2>
+                      </div>
+                      <p className="text-slate-500 dark:text-slate-400 text-sm md:text-base max-w-2xl">
+                        Harnessing Gemini's clinical insights to analyze, benchmark, and coach your wellness trends.
+                      </p>
+                    </div>
+
+                    {/* Controls */}
+                    <div className="flex flex-wrap items-center gap-4 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-2xl border border-slate-100 dark:border-slate-800/80">
+                      <div className="flex gap-1.5">
+                        {(['week', 'month', 'custom'] as const).map((opt) => (
+                          <button
+                            key={opt}
+                            onClick={() => setAiRangeFilter(opt)}
+                            className={cn(
+                              "px-5 py-2.5 rounded-xl text-sm font-bold capitalize transition-all",
+                              aiRangeFilter === opt
+                                ? "bg-white dark:bg-slate-800 text-brand-indigo shadow-sm border border-slate-100 dark:border-slate-700/50"
+                                : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                            )}
+                          >
+                            {opt === 'week' ? 'Last 7 Days' : opt === 'month' ? 'Last 30 Days' : 'Custom'}
+                          </button>
+                        ))}
+                      </div>
+
+                      {aiRangeFilter === 'custom' && (
+                        <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-slate-800">
+                          <input
+                            type="date"
+                            value={aiManualRange.from}
+                            onChange={(e) => setAiManualRange(prev => ({ ...prev, from: e.target.value }))}
+                            className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-850 text-sm font-bold text-slate-700 dark:text-slate-200 focus:ring-1 focus:ring-brand-indigo/30 focus:outline-none"
+                          />
+                          <span className="text-xs font-bold text-slate-400">TO</span>
+                          <input
+                            type="date"
+                            value={aiManualRange.to}
+                            onChange={(e) => setAiManualRange(prev => ({ ...prev, to: e.target.value }))}
+                            className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-855 text-sm font-bold text-slate-700 dark:text-slate-200 focus:ring-1 focus:ring-brand-indigo/30 focus:outline-none"
+                          />
+                        </div>
+                      )}
+
+                      <button
+                        onClick={handleReAnalyze}
+                        disabled={isRangeAnalyzing || (aiRangeFilter === 'custom' && (!aiManualRange.from || !aiManualRange.to))}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-brand-indigo hover:bg-indigo-600 disabled:opacity-50 text-white font-bold text-sm rounded-xl shadow-md transition-all shrink-0"
+                      >
+                        <Sparkles size={16} className={isRangeAnalyzing ? "animate-spin" : ""} />
+                        <span>{isRangeAnalyzing ? 'Analyzing...' : 'Re-Analyze'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Full Width Workspace */}
+                  <div className="flex flex-col gap-8 w-full animate-in fade-in duration-300">
+                    
+                    {(isRangeAnalyzing || isLoadingLastAnalysis) && !rangeAnalysis ? (
+                      /* Skeleton / Loading Screen */
+                      <div className="sleek-card p-16 flex flex-col items-center justify-center text-center gap-4 bg-gradient-to-br from-indigo-50/50 to-white dark:from-slate-900/50 dark:to-slate-800/50">
+                        <div className="w-20 h-20 bg-brand-indigo/10 text-brand-indigo rounded-full flex items-center justify-center mb-2 animate-bounce">
+                          <BrainCircuit size={40} />
+                        </div>
+                        <div>
+                          <h3 className="text-2xl font-bold font-display text-slate-800 dark:text-white">
+                            {isLoadingLastAnalysis ? "Retrieving Cached Analysis..." : "Synthesizing Clinical Trends..."}
+                          </h3>
+                          <p className="text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-2 text-sm leading-relaxed">
+                            {isLoadingLastAnalysis 
+                              ? "MediBot is fetching your last saved vital analysis result from secure storage."
+                              : "Gemini is computing your vital variances, heart rates, cardiovascular metrics, and personal health coach guides."}
+                          </p>
+                        </div>
+                        <div className="flex gap-1.5 mt-2">
+                          <span className="w-3 h-3 bg-brand-indigo rounded-full animate-bounce delay-100"></span>
+                          <span className="w-3 h-3 bg-indigo-500 rounded-full animate-bounce delay-200"></span>
+                          <span className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce delay-300"></span>
+                        </div>
+                      </div>
+                      ) : rangeAnalysisError ? (
+                        /* Error Box */
+                        <div className="sleek-card p-8 border border-red-200 dark:border-red-800/40 bg-red-50/30 dark:bg-red-900/10 flex items-start gap-4">
+                          <div className="w-12 h-12 bg-red-100 dark:bg-red-900/50 rounded-xl flex items-center justify-center text-red-600 dark:text-red-400 shrink-0">
+                            <AlertTriangle size={24} />
+                          </div>
+                          <div className="flex-1">
+                            <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm md:text-base">Analysis Interrupted</h4>
+                            <p className="text-slate-500 dark:text-slate-400 text-xs md:text-sm mt-1 leading-relaxed">{rangeAnalysisError}</p>
+                          </div>
+                        </div>
+                      ) : rangeAnalysis ? (
+                        /* Results Panel */
+                        <>
+                          {/* Scorecards */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {/* Stability Index */}
+                            <div className="sleek-card p-6 md:p-8 flex items-center justify-between gap-6 hover:scale-[1.01] transition-transform duration-200 cursor-default">
+                              <div className="flex flex-col gap-2">
+                                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Vitals Stability</span>
+                                <span className="text-3xl md:text-4xl font-bold text-slate-800 dark:text-slate-100 font-display">
+                                  {rangeAnalysis.metrics.stabilityIndex}%
+                                </span>
+                                <span className={cn(
+                                  "text-xs font-bold px-3 py-1 rounded-full w-max mt-1",
+                                  rangeAnalysis.metrics.stabilityStatus === 'Stable' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400" :
+                                  rangeAnalysis.metrics.stabilityStatus === 'Fluctuating' ? "bg-amber-100 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400" :
+                                  "bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-400"
+                                )}>
+                                  {rangeAnalysis.metrics.stabilityStatus}
+                                </span>
+                              </div>
+                              <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
+                                <svg className="w-20 h-20 transform -rotate-90">
+                                  <circle cx="40" cy="40" r="32" className="stroke-slate-100 dark:stroke-slate-800" strokeWidth="5.5" fill="transparent" />
+                                  <circle cx="40" cy="40" r="32" 
+                                    className="stroke-emerald-500 dark:stroke-emerald-400 transition-all duration-500" 
+                                    strokeWidth="5.5" 
+                                    fill="transparent" 
+                                    strokeDasharray="201" 
+                                    strokeDashoffset={201 - (201 * rangeAnalysis.metrics.stabilityIndex) / 100}
+                                    strokeLinecap="round" 
+                                  />
+                                </svg>
+                                <BrainCircuit size={20} className="absolute text-emerald-500 dark:text-emerald-400" />
+                              </div>
+                            </div>
+
+                            {/* Stress Rating */}
+                            <div className="sleek-card p-6 md:p-8 flex items-center justify-between gap-6 hover:scale-[1.01] transition-transform duration-200 cursor-default">
+                              <div className="flex flex-col gap-2">
+                                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Stress Rating</span>
+                                <span className="text-3xl md:text-4xl font-bold text-slate-800 dark:text-slate-100 font-display">
+                                  {rangeAnalysis.metrics.stressRating}%
+                                </span>
+                                <span className={cn(
+                                  "text-xs font-bold px-3 py-1 rounded-full w-max mt-1",
+                                  rangeAnalysis.metrics.stressStatus === 'Optimal' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400" :
+                                  rangeAnalysis.metrics.stressStatus === 'Mild' ? "bg-amber-100 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400" :
+                                  "bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400"
+                                )}>
+                                  {rangeAnalysis.metrics.stressStatus} Status
+                                </span>
+                              </div>
+                              <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
+                                <svg className="w-20 h-20 transform -rotate-90">
+                                  <circle cx="40" cy="40" r="32" className="stroke-slate-100 dark:stroke-slate-800" strokeWidth="5.5" fill="transparent" />
+                                  <circle cx="40" cy="40" r="32" 
+                                    className={cn(
+                                      "transition-all duration-500",
+                                      rangeAnalysis.metrics.stressStatus === 'Optimal' ? "stroke-emerald-500" :
+                                      rangeAnalysis.metrics.stressStatus === 'Mild' ? "stroke-amber-500" : "stroke-rose-500"
+                                    )} 
+                                    strokeWidth="5.5" 
+                                    fill="transparent" 
+                                    strokeDasharray="201" 
+                                    strokeDashoffset={201 - (201 * rangeAnalysis.metrics.stressRating) / 100}
+                                    strokeLinecap="round" 
+                                  />
+                                </svg>
+                                <Heart size={20} className={cn(
+                                  rangeAnalysis.metrics.stressStatus === 'Optimal' ? "text-emerald-500" :
+                                  rangeAnalysis.metrics.stressStatus === 'Mild' ? "text-amber-500" : "text-rose-500",
+                                  "absolute"
+                                )} />
+                              </div>
+                            </div>
+
+                            {/* Cardio Fitness */}
+                            <div className="sleek-card p-6 md:p-8 flex items-center justify-between gap-6 hover:scale-[1.01] transition-transform duration-200 cursor-default">
+                              <div className="flex flex-col gap-2">
+                                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Cardio Index</span>
+                                <span className="text-3xl md:text-4xl font-bold text-slate-800 dark:text-slate-100 font-display">
+                                  {rangeAnalysis.metrics.cardioFitness}%
+                                </span>
+                                <span className={cn(
+                                  "text-xs font-bold px-3 py-1 rounded-full w-max mt-1",
+                                  rangeAnalysis.metrics.cardioStatus === 'Excellent' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400" :
+                                  rangeAnalysis.metrics.cardioStatus === 'Good' ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400" :
+                                  rangeAnalysis.metrics.cardioStatus === 'Fair' ? "bg-amber-100 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400" :
+                                  "bg-red-100 text-red-600 dark:bg-red-950/40 dark:text-red-400"
+                                )}>
+                                  {rangeAnalysis.metrics.cardioStatus} Fitness
+                                </span>
+                              </div>
+                              <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
+                                <svg className="w-20 h-20 transform -rotate-90">
+                                  <circle cx="40" cy="40" r="32" className="stroke-slate-100 dark:stroke-slate-800" strokeWidth="5.5" fill="transparent" />
+                                  <circle cx="40" cy="40" r="32" 
+                                    className="stroke-indigo-500 dark:stroke-indigo-400 transition-all duration-500" 
+                                    strokeWidth="5.5" 
+                                    fill="transparent" 
+                                    strokeDasharray="201" 
+                                    strokeDashoffset={201 - (201 * rangeAnalysis.metrics.cardioFitness) / 100}
+                                    strokeLinecap="round" 
+                                  />
+                                </svg>
+                                <Activity size={20} className="absolute text-indigo-500 dark:text-indigo-400" />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Overview Summary */}
+                          <div className="sleek-card p-6 md:p-8 border-l-4 border-brand-indigo bg-indigo-50/15 dark:bg-indigo-955/15 flex flex-col gap-4">
+                            <div className="flex items-center gap-2.5 text-brand-indigo">
+                              <BrainCircuit size={24} />
+                              <h3 className="font-display font-bold text-slate-800 dark:text-slate-100 uppercase tracking-wider text-xs md:text-sm">Gemini Clinical Overview</h3>
+                            </div>
+                            <div className="text-sm md:text-base text-slate-600 dark:text-slate-300 leading-relaxed font-sans space-y-4 prose dark:prose-invert max-w-none">
+                              <ReactMarkdown>{rangeAnalysis.overview}</ReactMarkdown>
+                            </div>
+                          </div>
+
+                          {/* Recommendations Section */}
+                          <div className="flex flex-col gap-6 mt-2">
+                            <div>
+                              <h3 className="font-display font-bold text-slate-800 dark:text-slate-100 uppercase tracking-wider text-sm md:text-base">Actionable Recommendations</h3>
+                              <p className="text-xs md:text-sm text-slate-400 mt-1">Add personalized objectives directly into your daily tracker with one click.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              {rangeAnalysis.recommendations.map((rec) => (
+                                <div key={rec.id} className="sleek-card p-6 md:p-7 flex flex-col justify-between gap-6 hover:border-brand-indigo/30 transition-all">
+                                  <div className="flex flex-col gap-3">
+                                    <div className="flex items-center gap-3.5">
+                                      <div className={cn("w-11 h-11 rounded-2xl flex items-center justify-center shrink-0", rec.color)}>
+                                        {renderIcon(rec.icon, { size: 22 })}
+                                      </div>
+                                      <div className="flex flex-col">
+                                        <h4 className="text-sm md:text-base font-bold text-slate-800 dark:text-slate-100 leading-tight">{rec.title}</h4>
+                                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider mt-0.5">{rec.sub}</span>
+                                      </div>
+                                    </div>
+                                    <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 leading-relaxed mt-1">
+                                      {rec.details}
+                                    </p>
+                                  </div>
+
+                                  <button
+                                    onClick={() => handleSyncRecommendation(rec)}
+                                    className="w-full py-3 border border-brand-indigo/20 hover:border-brand-indigo bg-brand-indigo/5 hover:bg-brand-indigo hover:text-white text-brand-indigo dark:text-indigo-400 dark:bg-brand-indigo/10 rounded-xl text-xs font-bold tracking-widest uppercase transition-all flex items-center justify-center gap-1.5"
+                                  >
+                                    <Plus size={14} />
+                                    <span>Sync to Regiment</span>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        /* Empty state before running first analysis */
+                        <div className="sleek-card p-12 flex flex-col items-center justify-center text-center gap-4 bg-gradient-to-br from-indigo-50/50 to-white dark:from-slate-900/50 dark:to-slate-850/50">
+                          <div className="w-16 h-16 bg-brand-indigo/10 text-brand-indigo rounded-full flex items-center justify-center mb-2">
+                            <BrainCircuit size={32} />
+                          </div>
+                          <div>
+                            <h3 className="text-xl font-bold font-display text-slate-800 dark:text-white">Run Vitals Analysis</h3>
+                            <p className="text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-2 text-xs">
+                              Select a date period and trigger Gemini to compile cumulative stability scores, stress, and custom habits.
+                            </p>
+                          </div>
+                          <button
+                            onClick={handleReAnalyze}
+                            className="mt-2 flex items-center gap-1.5 px-6 py-3 bg-brand-indigo hover:bg-indigo-600 text-white font-bold text-xs rounded-xl shadow-lg transition-all"
+                          >
+                            <Sparkles size={14} />
+                            <span>Analyze Vitals Range</span>
+                          </button>
+                        </div>
+                      )}
+
                   </div>
                 </div>
               )}
@@ -1548,11 +2170,21 @@ export default function App() {
                 <form onSubmit={handleSaveRegiment} className="flex flex-col gap-6">
                   {currentRegiment.map(item => (
                     <div key={item.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-100 dark:border-slate-800/50">
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className={cn("w-8 h-8 rounded-md flex items-center justify-center", item.color)}>
-                          {renderIcon(item.icon, { size: 14 })}
+                       <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className={cn("w-8 h-8 rounded-md flex items-center justify-center", item.color)}>
+                            {renderIcon(item.icon, { size: 14 })}
+                          </div>
+                          <p className="font-bold text-sm text-slate-800 dark:text-slate-100">Goal</p>
                         </div>
-                        <p className="font-bold text-sm text-slate-800 dark:text-slate-100">Goal {item.id}</p>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteRegiment(item.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                          title="Delete Goal"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                       <div className="space-y-3">
                         <div className="space-y-1">
@@ -1701,6 +2333,144 @@ export default function App() {
             </div>
           )}
         </AnimatePresence>
+
+        {/* Floating AI Coach Assistant FAB & Panel */}
+        {profile && user && (
+          <div className="fixed bottom-6 right-6 z-[100] flex flex-col items-end gap-4 pointer-events-none">
+            {/* Chat Panel */}
+            <AnimatePresence>
+              {isChatOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 40, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 40, scale: 0.95 }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 280 }}
+                  className="pointer-events-auto w-[360px] sm:w-[400px] h-[550px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 shadow-2xl rounded-3xl flex flex-col overflow-hidden"
+                >
+                  {/* Chat Header */}
+                  <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 shrink-0">
+                    <div className="flex items-center gap-3">
+                      <div className="relative">
+                        <div className="w-10 h-10 rounded-full border-2 border-indigo-500 shadow-sm overflow-hidden bg-brand-indigo/10 text-brand-indigo flex items-center justify-center font-bold text-sm">
+                          MC
+                        </div>
+                        <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse"></span>
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight">MediCoach</h3>
+                        <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest leading-none">ONLINE - AI ASSISTANT</span>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={() => setIsChatOpen(false)}
+                      className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                      title="Close Chat"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* Chat History */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+                    {chatMessages.map((msg) => (
+                      <div key={msg.id} className={cn("flex flex-col max-w-[85%] gap-1", msg.role === 'user' ? "ml-auto items-end" : "mr-auto items-start")}>
+                        {msg.role === 'model' && (
+                          <span className="text-[9px] font-bold text-slate-400 uppercase ml-2 tracking-wider">MediCoach</span>
+                        )}
+                        <div className={cn(
+                          "p-3 rounded-2xl text-xs leading-relaxed font-sans shadow-sm",
+                          msg.role === 'user'
+                            ? "bg-brand-indigo text-white rounded-tr-none font-medium"
+                            : "bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-800/50"
+                        )}>
+                          {msg.role === 'model' ? (
+                            <div className="prose dark:prose-invert max-w-none text-xs leading-relaxed space-y-2">
+                              <ReactMarkdown>{msg.text}</ReactMarkdown>
+                            </div>
+                          ) : (
+                            msg.text
+                          )}
+                        </div>
+                        <span className="text-[8px] text-slate-400 font-semibold px-2">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    ))}
+
+                    {isChatSending && (
+                      <div className="flex flex-col max-w-[85%] gap-1 mr-auto items-start">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase ml-2 tracking-wider">MediCoach</span>
+                        <div className="p-3 bg-slate-50 dark:bg-slate-800/80 rounded-2xl rounded-tl-none border border-slate-100 dark:border-slate-800/50 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                          <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  {/* Suggestion Chips */}
+                  <div className="px-4 pb-2 shrink-0">
+                    <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none scroll-smooth whitespace-nowrap">
+                      {[
+                        { label: 'Improve Cardio', text: 'How can I improve my cardio index?' },
+                        { label: 'Explain Stability', text: 'Can you explain my vitals stability rating?' },
+                        { label: 'Breathing Routine', text: 'Suggest a breathing schedule to reduce high stress.' }
+                      ].map((chip, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => handleChipClick(chip.text)}
+                          disabled={isChatSending}
+                          className="px-2.5 py-1.5 bg-indigo-50 hover:bg-brand-indigo hover:text-white dark:bg-slate-800/50 dark:hover:bg-slate-800 text-brand-indigo dark:text-indigo-400 rounded-lg text-[9px] font-bold uppercase tracking-wider border border-brand-indigo/10 dark:border-slate-700/50 transition-all shrink-0 pointer-events-auto cursor-pointer"
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Chat Input */}
+                  <form onSubmit={handleSendMessage} className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50/20 dark:bg-slate-900/20 flex gap-2 shrink-0 pointer-events-auto">
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      disabled={isChatSending}
+                      placeholder="Ask MediCoach about your trends..."
+                      className="flex-1 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800/50 rounded-xl px-4 py-2.5 text-xs text-slate-700 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-indigo/30"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isChatSending || !chatInput.trim()}
+                      className="p-2.5 bg-brand-indigo hover:bg-indigo-600 disabled:opacity-50 text-white rounded-xl shadow-md transition-colors shrink-0 flex items-center justify-center cursor-pointer"
+                    >
+                      <Send size={15} />
+                    </button>
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Toggle Button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setIsChatOpen(prev => !prev)}
+              className="pointer-events-auto w-14 h-14 rounded-full bg-brand-indigo text-white flex items-center justify-center shadow-xl shadow-brand-indigo/30 hover:bg-indigo-600 transition-all focus:outline-none relative group cursor-pointer"
+            >
+              {isChatOpen ? <X size={22} /> : <MessageSquare size={22} />}
+              {!isChatOpen && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white dark:border-slate-900"></span>
+                </span>
+              )}
+            </motion.button>
+          </div>
+        )}
       </div>
     </div>
   );
