@@ -396,14 +396,22 @@ export default function App() {
     if (!profile) return;
 
     const formData = new FormData(e.currentTarget);
+    const hr = Number(formData.get('hr'));
+    let stressLevel: 'Low' | 'Mod' | 'High' = 'Low';
+    if (hr > 100) {
+      stressLevel = 'High';
+    } else if (hr >= 80) {
+      stressLevel = 'Mod';
+    }
+
     const data: VitalMeasurement = {
       userId: profile.userId,
       authUid: user?.uid || '',
       timestamp: new Date().toISOString(),
-      heartRate: Number(formData.get('hr')),
+      heartRate: hr,
       spo2: Number(formData.get('spo2')),
       temperature: Number(formData.get('temp')),
-      stress: 'Low',
+      stress: stressLevel,
       type: 'manual'
     };
 
@@ -1151,8 +1159,14 @@ export default function App() {
         {/* Profile Modal */}
         <AnimatePresence>
           {isProfileModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => {
+                if (allProfiles.length > 0) setIsProfileModalOpen(false);
+              }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1227,8 +1241,12 @@ export default function App() {
         {/* Edit Profile Modal */}
         <AnimatePresence>
           {isEditProfileModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsEditProfileModalOpen(false)}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1311,8 +1329,12 @@ export default function App() {
         {/* Manual Data Modal */}
         <AnimatePresence>
           {isManualModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsManualModalOpen(false)}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1348,8 +1370,12 @@ export default function App() {
         {/* Doctors Modal */}
         <AnimatePresence>
           {isDoctorsModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsDoctorsModalOpen(false)}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1458,8 +1484,12 @@ export default function App() {
         {/* Add Doctor Modal */}
         <AnimatePresence>
           {isAddDoctorModalOpen && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsAddDoctorModalOpen(false)}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1500,8 +1530,12 @@ export default function App() {
         {/* Edit Regiment Modal */}
         <AnimatePresence>
           {isRegimentModalOpen && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsRegimentModalOpen(false)}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
@@ -1548,8 +1582,12 @@ export default function App() {
         {/* Settings Modal */}
         <AnimatePresence>
           {isSettingsModalOpen && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <div
+              onClick={() => setIsSettingsModalOpen(false)}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+            >
               <motion.div
+                onClick={(e) => e.stopPropagation()}
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
