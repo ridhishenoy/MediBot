@@ -723,7 +723,9 @@ export default function App() {
     if (!profile) return;
 
     const formData = new FormData(e.currentTarget);
-    const hr = Number(formData.get('hr'));
+    const hrVal = formData.get('hr');
+    const hr = hrVal ? parseInt(hrVal.toString().trim(), 10) : 70;
+
     let stressLevel: 'Low' | 'Mod' | 'High' = 'Low';
     if (hr > 100) {
       stressLevel = 'High';
@@ -731,18 +733,27 @@ export default function App() {
       stressLevel = 'Mod';
     }
 
+    console.log(`[Manual Reading Saved] Heart Rate: ${hr}, Calculated Stress Level: ${stressLevel}`);
+
     const data: VitalMeasurement = {
       userId: profile.userId,
       authUid: user?.uid || '',
       timestamp: new Date().toISOString(),
       heartRate: hr,
-      spo2: Number(formData.get('spo2')),
-      temperature: Number(formData.get('temp')),
+      spo2: Number(formData.get('spo2')) || 98,
+      temperature: Number(formData.get('temp')) || 36.6,
       stress: stressLevel,
       type: 'manual'
     };
 
-    await addDoc(collection(db, 'measurements'), data);
+    try {
+      await addDoc(collection(db, 'measurements'), data);
+      console.log("Successfully stored vital measurement in Firestore:", data);
+    } catch (err) {
+      console.error("Failed to save manual vital measurement to Firestore:", err);
+      alert("Error saving manual reading to database.");
+    }
+
     setIsManualModalOpen(false);
   };
 
